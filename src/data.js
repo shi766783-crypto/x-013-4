@@ -100,5 +100,6 @@ export function createDemoState() {
       { id: 'activity-2', petId: 'pet-nori', date: '2026-09-13', duration: 50, type: '奔跑', location: '社区草坪', notes: '' },
       { id: 'activity-3', petId: 'pet-momo', date: '2026-09-14', duration: 20, type: '玩耍', location: '家中', notes: '' },
     ],
+    taskCompletions: {},
   }
 }
