@@ -5,15 +5,47 @@ const STORAGE_KEY = 'petcare-home-state'
 const saved = localStorage.getItem(STORAGE_KEY)
 const state = reactive(saved ? JSON.parse(saved) : createDemoState())
 
+// 兼容旧版本存档：没有 completions 字段时补上
+if (!state.completions) state.completions = {}
+
+// 清除非今天的完成记录：完成状态按日期记录，第二天自动恢复未完成
+function pruneStaleCompletions() {
+  const today = todayISO()
+  Object.keys(state.completions).forEach((key) => {
+    if (!key.endsWith(`:${today}`)) delete state.completions[key]
+  })
+}
+pruneStaleCompletions()
+
 watch(state, (value) => localStorage.setItem(STORAGE_KEY, JSON.stringify(value)), { deep: true })
+
+// 喂食计划每餐的展开数量
+const feedingMealCount = (item) => Number(item.times || 1)
+const taskKey = (kind, id) => `${kind}:${id}:${todayISO()}`
 
 export function usePetStore() {
   const petById = (id) => state.pets.find((pet) => pet.id === id)
   const petName = (id) => petById(id)?.name || '未命名宠物'
   const totalActivity = computed(() => state.activities.filter((item) => isThisWeek(item.date)).reduce((sum, item) => sum + Number(item.duration || 0), 0))
-  const pendingVaccines = computed(() => state.vaccines.filter((item) => daysFromToday(item.nextDate) <= 7).length)
-  const feedingTasks = computed(() => state.feedings.reduce((sum, item) => sum + Number(item.times || 0), 0))
+  const isTaskDone = (kind, id) => !!state.completions[taskKey(kind, id)]
+  function toggleTask(kind, id) {
+    const key = taskKey(kind, id)
+    if (state.completions[key]) delete state.completions[key]
+    else state.completions[key] = true
+  }
+  // 未来 7 天内（含已逾期）的疫苗始终计入提醒；逾期疫苗不允许勾选完成，今天到期且已完成的才剔除
+  const pendingVaccines = computed(() => state.vaccines.filter((item) => {
+    const days = daysFromToday(item.nextDate)
+    if (days > 7) return false
+    return days !== 0 || !isTaskDone('vaccine', item.id)
+  }).length)
+  const feedingTaskTotal = computed(() => state.feedings.reduce((sum, item) => sum + feedingMealCount(item), 0))
+  const feedingTasksDone = computed(() => state.feedings.reduce((sum, item) => sum + Array.from({ length: feedingMealCount(item) }, (_, index) => isTaskDone('feeding', `${item.id}-${index}`)).filter(Boolean).length, 0))
+  // 今日待喂食：今天还没喂的餐数
+  const feedingTasks = computed(() => Math.max(feedingTaskTotal.value - feedingTasksDone.value, 0))
   const medicationsToday = computed(() => state.medications.filter((item) => item.startDate <= todayISO() && item.endDate >= todayISO()).length)
+  // 今日待喂药：当前疗程中、今天还没喂的药
+  const medicationsPending = computed(() => state.medications.filter((item) => item.startDate <= todayISO() && item.endDate >= todayISO() && !isTaskDone('medication', item.id)).length)
   const achievements = computed(() => achievementDefinitions.map((item) => ({ ...item, unlocked: item.condition(state) })))
   const healthCompleteness = (petId) => {
     const fields = ['weight', 'temperature', 'heartRate']
@@ -34,8 +66,11 @@ export function usePetStore() {
   }
   function resetDemo() {
     const fresh = createDemoState()
-    Object.keys(state).forEach((key) => { state[key].splice(0, state[key].length, ...(fresh[key] || [])) })
+    Object.keys(fresh).forEach((key) => {
+      if (Array.isArray(state[key])) state[key].splice(0, state[key].length, ...fresh[key])
+      else state[key] = { ...fresh[key] }
+    })
   }
 
-  return { state, petById, petName, totalActivity, pendingVaccines, feedingTasks, medicationsToday, achievements, healthCompleteness, weightCompliance, add, addPet, resetDemo }
+  return { state, petById, petName, totalActivity, pendingVaccines, feedingTasks, feedingTaskTotal, feedingTasksDone, medicationsToday, medicationsPending, isTaskDone, toggleTask, achievements, healthCompleteness, weightCompliance, add, addPet, resetDemo }
 }
